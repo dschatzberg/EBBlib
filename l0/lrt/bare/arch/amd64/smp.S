@@ -66,7 +66,8 @@ _smp_gdt:
 
 .code64
 _smp_64:
-        mov $_smp_stack + SMP_STACK_SIZE, %rsp
+        mov _smp_stack, %rsp
+        add $SMP_STACK_SIZE, %rsp
         mov $0x0, %rdi
         mov $lrt_event_init, %rax
         call *%rax

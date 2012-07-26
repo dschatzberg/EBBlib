@@ -46,7 +46,7 @@ CObject(HelloWorld) {
   CObjInterface(App) *ft;
 };
 
-static void 
+static void
 dumpArgsAndEnviron(int argc, char **argv, char **environ)
 {
   int i;
@@ -55,15 +55,15 @@ dumpArgsAndEnviron(int argc, char **argv, char **environ)
   }
 
   if (environ) {
-    for (i=0; environ[i]!=NULL; i++) lrt_printf("environ[%d]=%s\n", 
-						i, environ[i]);
+    for (i=0; environ[i]!=NULL; i++) lrt_printf("environ[%d]=%s\n",
+                                                i, environ[i]);
   }
 }
 
 
 
 
-EBBRC 
+EBBRC
 HelloWorld_start(AppRef _self)
 {
   struct startinfo si;
@@ -83,4 +83,3 @@ CObjInterface(App) HelloWorld_ftable = {
 };
 
 APP_START_ONE(HelloWorld);
-

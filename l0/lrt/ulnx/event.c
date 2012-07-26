@@ -157,7 +157,14 @@ static void __attribute__ ((noreturn))
 lrt_event_loop(void)
 {
   // halt once:
-  lrt_event_halt();
+  //lrt_event_halt();
+
+  //wait for eventmgr to be initialized
+  EventMgrPrimId id;
+  do {
+    id = ACCESS_ONCE(theEventMgrPrimId);
+    cpu_relax();
+  } while(id == 0 || id == (EventMgrPrimId)-1);
 
   while(1) {
     COBJ_EBBCALL(theEventMgrPrimId, enableInterrupts);

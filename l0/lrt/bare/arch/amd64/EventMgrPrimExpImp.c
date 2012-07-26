@@ -243,7 +243,6 @@ CObjInterface(EventMgrPrimExp) EventMgrPrimExpImp_ftable_nobv = {
     .dispatchEvent = EventMgrPrimExpImp_dispatchEvent
   },
   .enableBitvectorLocal = EventMgrPrimExpImp_enableBitvectorLocal,
-  .disableBitvector = EventMgrPrimExpImp_disableBitvector,
   .enableBitvectorAll = EventMgrPrimExpImp_enableBitvectorAll,
   .disableBitvector = EventMgrPrimExpImp_disableBitvector,
   .enablePoll = EventMgrPrimExpImp_enablePoll,

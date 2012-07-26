@@ -1,3 +1,6 @@
+#ifndef SYNC_MISC_H
+#define SYNC_MISC_H
+
 /*
  * Copyright (C) 2011 by Project SESA, Boston University
  *
@@ -19,17 +22,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include <config.h>
-#include <l0/lrt/event.h>
-#include <l0/lrt/mem.h>
 
-void *
-lrt_mem_alloc(size_t size, size_t aligned, lrt_event_loc loc) {
-  struct lrt_mem_desc *desc = &bootmem[loc];
-  char *ptr = desc->current;
-  //align up
-  ptr = (char *)((((uintptr_t)ptr + aligned - 1) / aligned) * aligned);
-  LRT_Assert((ptr + size) < desc->end);
-  desc->current = ptr + size;
-  return ptr;
-}
+#define ACCESS_ONCE(x) (*(volatile typeof(x) *)&(x))
+
+#endif

@@ -26,8 +26,7 @@
 #include <stdint.h>
 
 #include <arch/cpu.h>
-
-#define ACCESS_ONCE(x) (*(volatile typeof(x) *)&(x))
+#include <sync/misc.h>
 
 typedef union rwlock
 {

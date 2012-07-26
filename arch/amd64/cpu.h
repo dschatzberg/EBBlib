@@ -47,12 +47,17 @@ static const uintptr_t ID_FLAG = 1 << 21;
 
 /* CPUID INDICES */
 static const uint32_t CPUID_FEATURES = 0x1;
+static const uint32_t CPUID_MONITOR = 0x5;
 static const uint32_t CPUID_MAX_EXT_FUNC = 0x80000000;
 static const uint32_t CPUID_EXT_FEATURES = 0x80000001;
 
 /* CPUID FEATURE FLAGS */
+static const uint32_t CPUID_ECX_HAS_MONITOR = 1 << 3;
 static const uint32_t CPUID_ECX_HAS_X2APIC = 1 << 21;
 static const uint32_t CPUID_EDX_HAS_LAPIC = 1 << 9;
+
+/* CPUID MONITOR FLAGS */
+static const uint32_t CPUID_MONITOR_ECX_HAS_IBE = 1 << 1;
 
 /* CPUID EXTENDED FEATURE FLAGS */
 static const uint32_t CPUID_EXT_HAS_1GPAGES = 1 << 26;
@@ -121,6 +126,15 @@ cpuid(uint32_t index, uint32_t *eax, uint32_t *ebx, uint32_t *ecx,
 }
 
 /* CPUID FEATURES */
+static inline bool
+has_monitor(void)
+{
+  uint32_t features, dummy;
+
+  cpuid(CPUID_FEATURES, &dummy, &dummy, &features, &dummy);
+
+  return (features & CPUID_ECX_HAS_MONITOR);
+}
 
 static inline bool
 has_x2apic(void)
@@ -286,11 +300,31 @@ rdtscp(void) {
   return (uint64_t)high << 32 | low;
 }
 
-
-static inline uint64_t 
+static inline uint64_t
 read_timestamp(void)
 {
   return rdtsc();
+}
+
+static inline void
+monlinesize(uint32_t *min, uint32_t *max)
+{
+  uint32_t dummy;
+
+  cpuid(CPUID_MONITOR, min, max, &dummy, &dummy);
+
+  *min &= 0xffff;
+  *max &= 0xffff;
+}
+
+static inline bool
+monitor_ibe(void)
+{
+  uint32_t dummy, ecx;
+
+  cpuid(CPUID_MONITOR, &dummy, &dummy, &ecx, &dummy);
+
+  return ecx & CPUID_MONITOR_ECX_HAS_IBE;
 }
 
 #endif
