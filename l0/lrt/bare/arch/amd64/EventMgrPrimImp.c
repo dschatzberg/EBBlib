@@ -58,7 +58,30 @@ EventMgrPrimImp_allocEventNo(EventMgrPrimRef _self, EventNo *eventNoPtr)
   int i;
   //we start from the beginning and just find the first
   // unallocated event
-  for (i = 0; i < LRT_EVENT_NUM_EVENTS; i++) {
+  for (i = 0;
+       i < (LRT_EVENT_NUM_EVENTS - LRT_EVENT_NUM_HIGH_PRIORITY_EVENTS);
+       i++) {
+    uint8_t res = __sync_fetch_and_or(&alloc_table[i / 8], 1 << (i % 8));
+    if (!(res & (1 << (i % 8)))) {
+      break;
+    }
+  }
+  if (i >= (LRT_EVENT_NUM_EVENTS - LRT_EVENT_NUM_HIGH_PRIORITY_EVENTS)) {
+    return EBBRC_OUTOFRESOURCES;
+  }
+  *eventNoPtr = i;
+  return EBBRC_OK;
+}
+
+static EBBRC
+EventMgrPrimImp_allocHighPriorityEventNo(EventMgrPrimRef _self,
+                                         EventNo *eventNoPtr)
+{
+  int i;
+  //we start from the beginning and just find the first
+  // unallocated event
+  for (i = (LRT_EVENT_NUM_EVENTS - LRT_EVENT_NUM_HIGH_PRIORITY_EVENTS);
+       i < LRT_EVENT_NUM_EVENTS; i++) {
     uint8_t res = __sync_fetch_and_or(&alloc_table[i / 8], 1 << (i % 8));
     if (!(res & (1 << (i % 8)))) {
       break;
@@ -134,6 +157,7 @@ EventMgrPrimImp_enableInterrupts(EventMgrPrimRef _self)
 CObjInterface(EventMgrPrim) EventMgrPrimImp_ftable = {
   .allocEventNo = EventMgrPrimImp_allocEventNo,
   .freeEventNo = EventMgrPrimImp_freeEventNo,
+  .allocHighPriorityEventNo = EventMgrPrimImp_allocHighPriorityEventNo,
   .bindEvent = EventMgrPrimImp_bindEvent,
   .routeIRQ = EventMgrPrimImp_routeIRQ,
   .triggerEvent = EventMgrPrimImp_triggerEvent,
@@ -174,19 +198,31 @@ EventMgrPrimImp_createRep(CObjEBBRootMultiRef root)
 }
 
 EBBRC
+EventMgrPrimImpCreate(EBBMissFunc *mf, EBBArg *arg)
+{
+  static CObjEBBRootMultiImpRef rootRef;
+  EBBRC rc = CObjEBBRootMultiImpCreate(&rootRef, EventMgrPrimImp_createRep);
+  LRT_RCAssert(rc);
+  *mf = CObjEBBMissFunc;
+  *arg = (EBBArg)rootRef;
+  return EBBRC_OK;
+}
+
+EBBRC
 EventMgrPrimImpInit(void)
 {
   EBBRC rc;
-  static CObjEBBRootMultiImpRef rootRef;
 
   if (__sync_bool_compare_and_swap(&theEventMgrPrimId, (EventMgrPrimId)0,
                                    (EventMgrPrimId)-1)) {
-    EBBId id;
-     rc = CObjEBBRootMultiImpCreate(&rootRef, EventMgrPrimImp_createRep);
+    EBBMissFunc mf;
+    EBBArg arg;
+    rc = EventMgrPrimImpCreate(&mf, &arg);
     LRT_RCAssert(rc);
+    EBBId id;
     rc = EBBAllocPrimId(&id);
     LRT_RCAssert(rc);
-    rc = EBBBindPrimId(id, CObjEBBMissFunc, (EBBArg)rootRef);
+    rc = EBBBindPrimId(id, mf, arg);
     LRT_RCAssert(rc);
     theEventMgrPrimId = (EventMgrPrimId)id;
   } else {

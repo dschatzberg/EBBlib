@@ -5,6 +5,9 @@ l0_lrt_bare_arch_amd64_sources = \
 	l0/lrt/bare/arch/amd64/event.c \
 	l0/lrt/bare/arch/amd64/event.h \
 	l0/lrt/bare/arch/amd64/event_loc.h \
+	l0/lrt/bare/arch/amd64/EventMgrPrimExpImp.c \
+	l0/lrt/bare/arch/amd64/EventMgrPrimImp.c \
+	l0/lrt/bare/arch/amd64/EventMgrPrimImpMwait.c \
 	l0/lrt/bare/arch/amd64/init64.c \
 	l0/lrt/bare/arch/amd64/init64.h \
 	l0/lrt/bare/arch/amd64/isr.S \
@@ -18,9 +21,7 @@ l0_lrt_bare_arch_amd64_sources = \
 	l0/lrt/bare/arch/amd64/smp.S \
 	l0/lrt/bare/arch/amd64/start.S \
 	l0/lrt/bare/arch/amd64/trans.c \
-	l0/lrt/bare/arch/amd64/trans.h \
-	l0/lrt/bare/arch/amd64/EventMgrPrimExpImp.c \
-	l0/lrt/bare/arch/amd64/EventMgrPrimImp.c 
+	l0/lrt/bare/arch/amd64/trans.h
 
 if LRT_BARE
 if x86_64

@@ -51,6 +51,7 @@ struct lrt_event_local_data {
   int pipefd_write; //For synthesized events from potentially other
                     //locations
   uintptr_t *altstack;
+  uintptr_t vec[LRT_EVENT_NUM_EVENTS / (sizeof(uintptr_t) * 8)];
 } _ALIGN_CACHE_ ;
 
 //To be allocated at preinit, the array of local event data
@@ -70,57 +71,74 @@ lrt_event_get_event_nonblock(void)
   //get my local event data
   struct lrt_event_local_data *ldata = &event_data[lrt_my_event_loc()];
 
-#if __APPLE__
-  struct timespec timeout = {
-    .tv_sec = 0,
-    .tv_nsec = 0
-  };
-  struct kevent kev;
-  rc = kevent(ldata->fd, NULL, 0, &kev, 1, &timeout);
-  if (rc == 0) return -1;
-  LRT_Assert(rc > 0);
-
-#elif __linux__
-  struct epoll_event kev;
+  lrt_event_num ev;
 
   do {
-    rc = epoll_wait(ldata->fd, &kev, 1, 0);
-  } while(rc == -1 && errno == EINTR);
-  if (rc == -1) {
-    perror("epoll");
-    LRT_Assert(0);
-  }
-  if (rc == 0) return -1;	/* don't have anything */
-
-  //FIXME: check for errors
-#endif
-
-  lrt_event_num ev;
-  if (
+    ev = -1;
 #if __APPLE__
-      kev.udata == (void *)PIPE_UDATA
-#elif __linux__
-      kev.data.u64 == (uint64_t)PIPE_UDATA
-#endif
-      ) {
-    //We received at least a byte on the pipe
+    struct timespec timeout = {
+      .tv_sec = 0,
+      .tv_nsec = 0
+    };
+    struct kevent kev;
+    rc = kevent(ldata->fd, NULL, 0, &kev, 1, &timeout);
+    if (rc == 0)
+      break;
+    LRT_Assert(rc > 0);
 
-    //This is technically a blocking read, but I don't believe it
-    //matters because we only woke up because the pipe was ready
-    //to read and we are the only reader
-    ssize_t rc = read(ldata->pipefd_read, &ev, sizeof(ev));
-    LRT_Assert(rc == sizeof(ev));
+#elif __linux__
+    struct epoll_event kev;
+
+    do {
+      rc = epoll_wait(ldata->fd, &kev, 1, 0);
+    } while(rc == -1 && errno == EINTR);
+    if (rc == 0) {
+      break;
+    }
+    if (rc == -1) {
+      perror("epoll");
+      LRT_Assert(0);
+    }
+
     //FIXME: check for errors
-
-  } else {
-    //IRQ occurred
-#if __APPLE__
-    ev = (lrt_event_num)(intptr_t)kev.udata;
-#elif __linux__
-    ev = (lrt_event_num)kev.data.u64;
 #endif
+
+    if (
+#if __APPLE__
+        kev.udata == (void *)PIPE_UDATA
+#elif __linux__
+        kev.data.u64 == (uint64_t)PIPE_UDATA
+#endif
+        ) {
+      //We received at least a byte on the pipe
+
+      //This is technically a blocking read, but I don't believe it
+      //matters because we only woke up because the pipe was ready
+      //to read and we are the only reader
+      ssize_t rc = read(ldata->pipefd_read, &ev, sizeof(ev));
+      LRT_Assert(rc == sizeof(ev));
+      //FIXME: check for errors
+    } else {
+      //IRQ occurred
+#if __APPLE__
+      ev = (lrt_event_num)(intptr_t)kev.udata;
+#elif __linux__
+      ev = (lrt_event_num)kev.data.u64;
+#endif
+    }
+    ldata->vec[ev / (sizeof(uintptr_t) * 8)] |=
+      1 << (ev % (sizeof(uintptr_t) * 8));
+  } while (ev != -1);
+  for (int i = 0; i < (LRT_EVENT_NUM_EVENTS / (sizeof(uintptr_t) * 8));
+       i++) {
+    if (ldata->vec[i]) {
+      int bit = __builtin_ffsl(ldata->vec[i]);
+      LRT_Assert(bit != 0);
+      ldata->vec[i] &= ~(1 << (bit - 1));
+      return bit - 1;
+    }
   }
-  return ev;
+  return -1;
 }
 
 void
@@ -214,27 +232,27 @@ lrt_event_init(void *myloc)
   ldata->pipefd_write = pipes[1];
 
   //add the pipe to the watched fd
-  #if __APPLE__
+#if __APPLE__
   struct timespec timeout = {
-    .tv_sec = 0,
+  .tv_sec = 0,
     .tv_nsec = 0
-  };
+    };
 
   //setup the read pipe event
   struct kevent kev;
   EV_SET(&kev, ldata->pipefd_read, EVFILT_READ,
-         EV_ADD, 0, 0, (void *)PIPE_UDATA);
+    EV_ADD, 0, 0, (void *)PIPE_UDATA);
 
   //add it to the keventfd
   kevent(ldata->fd,  &kev, 1, NULL, 0, &timeout);
   //FIXME: check for errors
-  #elif __linux__
+#elif __linux__
   struct epoll_event ev = {
     .events = EPOLLIN,
     .data.u64 = (uint64_t)PIPE_UDATA
   };
   epoll_ctl(ldata->fd, EPOLL_CTL_ADD, ldata->pipefd_read, &ev);
-  #endif
+#endif
 
   // we call the start routine to initialize
   // mem and trans before falling into the loop
@@ -287,26 +305,29 @@ lrt_event_trigger_event(lrt_event_num num,
                         enum lrt_event_loc_desc desc,
                         lrt_event_loc loc)
 {
-  int pipefd;
+  int *pipefd;
 
   if (desc == LRT_EVENT_LOC_SINGLE) {
-    //protects from a race on startup
-    do {
-      pipefd = *(volatile int *)&event_data[loc].pipefd_write;
-    } while (pipefd == 0);
+    pipefd = &event_data[loc].pipefd_write;
 
-    ssize_t rc = write(pipefd, &num, sizeof(num));
+    //protects from a race on startup
+    while (ACCESS_ONCE(*pipefd) == 0) {
+      cpu_relax();
+    }
+    ssize_t rc = write(*pipefd, &num, sizeof(num));
     LRT_Assert(rc == sizeof(num));
     //FIXME: check errors
   } else if (desc == LRT_EVENT_LOC_ALL) {
     lrt_event_loc num_ev = lrt_num_event_loc();
     for (lrt_event_loc i = 0; i < num_ev; i++) {
-      //protects from a race on startup
-      do {
-        pipefd = *(volatile int *)&event_data[i].pipefd_write;
-      } while (pipefd == 0);
+      pipefd = &event_data[i].pipefd_write;
 
-      ssize_t rc = write(pipefd, &num, sizeof(num));
+      //protects from a race on startup
+      while (ACCESS_ONCE(*pipefd) == 0) {
+        cpu_relax();
+      }
+
+      ssize_t rc = write(*pipefd, &num, sizeof(num));
       LRT_Assert(rc == sizeof(num));
     }
   }

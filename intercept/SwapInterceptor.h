@@ -1,7 +1,8 @@
-#ifndef __EBB_EVENT_MGR_PRIM_IMP_H__
-#define __EBB_EVENT_MGR_PRIM_IMP_H__
+#ifndef INTERCEPT_SWAP_INTERCEPTOR_H
+#define INTERCEPT_SWAP_INTERCEPTOR_H
+
 /*
- * Copyright (C) 2011 by Project SESA, Boston University
+ * Copyright (C) 2012 by Project SESA, Boston University
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -22,8 +23,15 @@
  * THE SOFTWARE.
  */
 
-#include <l0/EventMgrPrim.h>
+#include <l0/EBBMgrPrim.h>
 
-extern EBBRC EventMgrPrimImpCreate(EBBMissFunc *mf, EBBArg *arg);
-extern EBBRC EventMgrPrimImpInit(void);
+COBJ_EBBType(SwapInterceptor) {
+  CObjImplements(Interceptor);
+  EBBRC (*begin)(SwapInterceptorRef self);
+};
+
+typedef void (*TransferFunc) (void);
+
+extern EBBRC SwapInterceptorCreate(SwapInterceptorId *id, TransferFunc tf);
+
 #endif

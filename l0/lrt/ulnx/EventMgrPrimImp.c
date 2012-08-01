@@ -58,13 +58,34 @@ EventMgrPrim_allocEventNo(EventMgrPrimRef _self, EventNo *eventNoPtr)
   int i;
   //we start from the beginning and just find the first
   // unallocated event
-  for (i = 0; i < LRT_EVENT_NUM_EVENTS; i++) {
+  for (i = LRT_EVENT_NUM_HIGH_PRIORITY_EVENTS;
+       i < LRT_EVENT_NUM_EVENTS; i++) {
     uint8_t res = __sync_fetch_and_or(&alloc_table[i / 8], 1 << (i % 8));
     if (!(res & (1 << (i % 8)))) {
       break;
     }
   }
   if (i >= LRT_EVENT_NUM_EVENTS) {
+    return EBBRC_OUTOFRESOURCES;
+  }
+  *eventNoPtr = i;
+  return EBBRC_OK;
+}
+
+static EBBRC
+EventMgrPrim_allocHighPriorityEventNo(EventMgrPrimRef _self,
+                                      EventNo *eventNoPtr)
+{
+  int i;
+  //we start from the beginning and just find the first
+  // unallocated event
+  for (i = 0; i < LRT_EVENT_NUM_HIGH_PRIORITY_EVENTS; i++) {
+    uint8_t res = __sync_fetch_and_or(&alloc_table[i / 8], 1 << (i % 8));
+    if (!(res & (1 << (i % 8)))) {
+      break;
+    }
+  }
+  if (i >= LRT_EVENT_NUM_HIGH_PRIORITY_EVENTS) {
     return EBBRC_OUTOFRESOURCES;
   }
   *eventNoPtr = i;
@@ -119,9 +140,12 @@ EventMgrPrim_enableInterrupts(EventMgrPrimRef _self)
   EventMgrPrimImpRef self = (EventMgrPrimImpRef)_self;
   int rc;
 
-  lrt_event_halt();
   rc = lrt_event_get_event_nonblock();
-  LRT_Assert(rc >= 0);
+  if (rc == -1) {
+    lrt_event_halt();
+    rc = lrt_event_get_event_nonblock();
+    LRT_Assert(rc >= 0);
+  }
 
   struct lrt_event_descriptor *desc = &self->lrt_event_table_ptr[rc];
   lrt_trans_id id = desc->id;
@@ -135,6 +159,7 @@ EventMgrPrim_enableInterrupts(EventMgrPrimRef _self)
 
 CObjInterface(EventMgrPrim) EventMgrPrimImp_ftable = {
   .allocEventNo = EventMgrPrim_allocEventNo,
+  .allocHighPriorityEventNo = EventMgrPrim_allocHighPriorityEventNo,
   .freeEventNo = EventMgrPrim_freeEventNo,
   .bindEvent = EventMgrPrim_bindEvent,
   .routeIRQ = EventMgrPrim_routeIRQ,

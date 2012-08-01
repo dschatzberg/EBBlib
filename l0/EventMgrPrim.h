@@ -74,6 +74,9 @@ COBJ_EBBType(EventMgrPrim) {
 
   EBBRC (*freeEventNo) (EventMgrPrimRef _self, EventNo eventNo);
 
+  EBBRC (*allocHighPriorityEventNo)
+    (EventMgrPrimRef _self, EventNo *eventNoPtr);
+
   EBBRC (*bindEvent) (EventMgrPrimRef _self, EventNo eventNo,
                       EBBId handler, EBBFuncNum fn);
 

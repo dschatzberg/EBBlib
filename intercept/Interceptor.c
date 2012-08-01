@@ -82,7 +82,12 @@ intercept_precall(struct args *args, EBBFuncNum fnum, union func_ret *fr)
   lrt_event_altstack_push((uintptr_t)ref);
   fr->func = targ_ref->ft[fnum];
   InterceptorId intId = ref->interceptor_id;
-  return COBJ_EBBCALL(intId, PreCall, args, fnum, fr);
+  EBBRC rc = COBJ_EBBCALL(intId, PreCall, args, fnum, fr);
+  if (*(lrt_trans_rep_ref *)args == NULL) {
+    lrt_trans_rep_ref targ_ref = lrt_trans_id_dref(ref->target_id);
+    *(lrt_trans_rep_ref *)args = targ_ref;
+  }
+  return rc;
 }
 
 EBBRC

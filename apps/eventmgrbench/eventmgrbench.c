@@ -107,13 +107,31 @@ static EventNo localEvent;
 static struct barrier_s barrier1;
 static struct barrier_s barrier2;
 static int num_cores = 0;
+static int order;
+
+static void setupNextTest(void);
+extern EBBRC EventMgrPrimImpMwaitInit(void);
+
+
+void EventTransferFunc(void) {
+  //destroy old eventmgr
+  //set EventMgrPrimId to zero
+  theEventMgrPrimId = (EventMgrPrimId)0;
+  //init next eventmgr
+  EBBRC rc = EventMgrPrimImpMwaitInit();
+  LRT_RCAssert(rc);
+  //FIXME: No state transfer!
+  //we are done so lets setup the next test
+  setupNextTest();
+}
 
 static void setupNextTest(void)
 {
   enum stage_type {
     NOT_SETUP,
     LOCAL_NOT_SETUP,
-    LOCAL_SETUP
+    LOCAL_SETUP,
+    COMPLETE
   };
   static enum stage_type stage = NOT_SETUP;
   EBBRC rc;
@@ -149,6 +167,7 @@ static void setupNextTest(void)
       lrt_printf("Running Local Test with %d cores\n", num_cores);
       init_barrier(&barrier1, num_cores);
       init_barrier(&barrier2, num_cores);
+      order = 0;
       for (i = 0;
            i < num_cores;
            i++) {
@@ -156,8 +175,15 @@ static void setupNextTest(void)
                                 runTestEvent, EVENT_LOC_SINGLE, i);
         LRT_RCAssert(rc);
       }
-    }
+      break;
+    } //else fall through
+  case COMPLETE:
+    //swap event managers
+
     break;
+  default:
+    lrt_printf("Unknown stage!\n");
+    LRT_Assert(0);
   }
 }
 
@@ -208,7 +234,10 @@ EventMgrBench_localEvent(EventMgrBenchRef self)
     int sense1 = 0;
     int sense2 = 0;
     barrier(&barrier1, &sense1);
+    while(ACCESS_ONCE(order) != MyEventLoc())
+      ;
     outputResults(self);
+    order++;
     barrier(&barrier2, &sense2);
     if (MyEventLoc() == 0) {
       setupNextTest();
@@ -230,6 +259,7 @@ CObjInterface(EventMgrBench) EventMgrBench_ftable = {
  * has its own app_start, since it wants to start up a
  * different EventMgr from the default
  */
+
 EBBRC
 app_start()
 {

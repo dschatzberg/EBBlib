@@ -27,4 +27,5 @@ uint8_t *apic_id_table;
 uint8_t lrt_event_loc2apicid(lrt_event_loc loc);
 
 //first 32 interrupts are reserved
+#define LRT_EVENT_NUM_HIGH_PRIORITY_EVENTS (16)
 #define LRT_EVENT_NUM_EVENTS (256 - 32)

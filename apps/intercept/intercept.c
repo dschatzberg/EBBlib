@@ -24,6 +24,7 @@
 
 #include <intercept/Interceptor.h>
 #include <intercept/TestInterceptor.h>
+#include <intercept/SwapInterceptor.h>
 #include <arch/args.h>
 #include <arch/cpu.h>
 #include <l0/EventMgrPrim.h>
@@ -38,13 +39,23 @@ COBJ_EBBType(Target) {
 };
 
 static EBBRC
-Target_func(TargetRef ref)
+Target0_func(TargetRef ref)
 {
   return EBBRC_OK;
 }
 
-static CObjInterface(Target) Target_ftable = {
-  .func = Target_func
+static CObjInterface(Target) Target0_ftable = {
+  .func = Target0_func
+};
+
+static EBBRC
+Target1_func(TargetRef ref)
+{
+  return EBBRC_OK;
+}
+
+static CObjInterface(Target) Target1_ftable = {
+  .func = Target1_func
 };
 
 CObject(Intercept) {
@@ -54,28 +65,69 @@ CObject(Intercept) {
 CObjInterface(Intercept) {
   CObjImplements(App);
   EBBRC (*work) (InterceptRef self);
+  EBBRC (*continueSwap) (InterceptRef self);
 };
 
 static TargetId target;
 static EventNo evnum;
 
+static TargetRef targRef0;
+static CObjEBBRootSharedRef targRootRef0;
+
+static EventNo continueEv;
+
+static SwapInterceptorId id2;
+static InterceptorControllerId controllerId2;
+
+static void transfer_func() {
+  //Free the original target:
+  EBBPrimFree(sizeof(Target), targRef0);
+  CObjEBBRootSharedDestroy(targRootRef0);
+
+  //allocate a new one
+  TargetRef targRef1;
+  EBBRC rc = EBBPrimMalloc(sizeof(Target), &targRef1, EBB_MEM_GLOBAL);
+  LRT_RCAssert(rc);
+  targRef1->ft = &Target1_ftable;
+
+  CObjEBBRootSharedRef targRootRef1;
+  rc = CObjEBBRootSharedCreate(&targRootRef1, (EBBRepRef)targRef1);
+  LRT_RCAssert(rc);
+
+  rc = CObjEBBBind((EBBId)target, targRootRef1);
+  LRT_RCAssert(rc);
+
+  //no transfer of state
+
+  //have ourselves call the target object
+  rc = COBJ_EBBCALL(theEventMgrPrimId, allocEventNo, &continueEv);
+  LRT_RCAssert(rc);
+
+  rc = COBJ_EBBCALL(theEventMgrPrimId, bindEvent, continueEv,
+                    (EBBId)theAppId,
+                    COBJ_FUNCNUM_FROM_TYPE(CObjInterface(Intercept),
+                                           continueSwap));
+  LRT_RCAssert(rc);
+  rc = COBJ_EBBCALL(theEventMgrPrimId, triggerEvent, continueEv,
+                    EVENT_LOC_SINGLE, MyEventLoc());
+  LRT_RCAssert(rc);
+}
+
 EBBRC
 Intercept_start(AppRef _self)
 {
   InterceptRef self = (InterceptRef)_self;
-  TargetRef targRef;
-  EBBRC rc = EBBPrimMalloc(sizeof(Target), &targRef, EBB_MEM_GLOBAL);
+  EBBRC rc = EBBPrimMalloc(sizeof(Target), &targRef0, EBB_MEM_GLOBAL);
   LRT_RCAssert(rc);
-  targRef->ft = &Target_ftable;
+  targRef0->ft = &Target0_ftable;
 
   rc = EBBAllocPrimId((EBBId *)&target);
   LRT_RCAssert(rc);
 
-  CObjEBBRootSharedRef targRootRef;
-  rc = CObjEBBRootSharedCreate(&targRootRef, (EBBRepRef)targRef);
+  rc = CObjEBBRootSharedCreate(&targRootRef0, (EBBRepRef)targRef0);
   LRT_RCAssert(rc);
 
-  rc = CObjEBBBind((EBBId)target, targRootRef);
+  rc = CObjEBBBind((EBBId)target, targRootRef0);
   LRT_RCAssert(rc);
   //Target initialized
 
@@ -108,9 +160,9 @@ Intercept_start(AppRef _self)
   for(EventNo num = NextEventLoc(MyEventLoc());
       num != MyEventLoc();
       num = NextEventLoc(num)) {
-      rc = COBJ_EBBCALL(theEventMgrPrimId, triggerEvent, evnum,
-                        EVENT_LOC_SINGLE, num);
-      LRT_RCAssert(rc);
+    rc = COBJ_EBBCALL(theEventMgrPrimId, triggerEvent, evnum,
+                      EVENT_LOC_SINGLE, num);
+    LRT_RCAssert(rc);
   }
 
   //Ok now all cores are invoking the target repeatedly
@@ -168,11 +220,24 @@ Intercept_start(AppRef _self)
   while ((read_timestamp() - time) < 1000000)
     ;
 
-  lrt_exit(0);
+  rc = SwapInterceptorCreate(&id2, transfer_func);
+  LRT_RCAssert(rc);
+
+  rc = EBBAllocPrimId((EBBId *)&controllerId2);
+  LRT_RCAssert(rc);
+
+  InterceptorControllerImp_Create(controllerId2);
+  LRT_RCAssert(rc);
+
+  rc = COBJ_EBBCALL(controllerId2, start, (EBBId)target, (InterceptorId)id2);
+  LRT_RCAssert(rc);
+
+  rc = COBJ_EBBCALL(id2, begin);
+
   return EBBRC_OK;
 }
 
-EBBRC
+static EBBRC
 Intercept_work(InterceptRef self)
 {
   COBJ_EBBCALL(target, func);
@@ -182,9 +247,28 @@ Intercept_work(InterceptRef self)
   return EBBRC_OK;
 }
 
+static EBBRC
+Interceptor_continueSwap(InterceptRef self)
+{
+  //free Event
+  EBBRC rc = COBJ_EBBCALL(theEventMgrPrimId, freeEventNo, continueEv);
+  LRT_RCAssert(rc);
+
+  rc = COBJ_EBBCALL(controllerId2, stop);
+  LRT_RCAssert(rc);
+
+  //destroy id2...
+  uint64_t time = read_timestamp();
+  while ((read_timestamp() - time) < 1000000)
+    ;
+
+  lrt_exit(0);
+  return EBBRC_OK;
+}
 CObjInterface(Intercept) Intercept_ftable = {
   {.start = Intercept_start},
-  .work = Intercept_work
+  .work = Intercept_work,
+  .continueSwap = Interceptor_continueSwap
 };
 
 APP_START_ONE(Intercept);

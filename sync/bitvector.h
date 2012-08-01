@@ -27,16 +27,17 @@
 /*
  * Bitvector as macro for arbitrary number of bits.  Uses atomic operations
  * to set and unset bits; to use for a fred bitvector with 512 bits, say:
- * say DEF_BITVEC(fred, 512). Will aign up to a WORDSIZE bit word. 
+ * say DEF_BITVEC(fred, 512). Will aign up to a WORDSIZE bit word.
 */
 
 #define WORDSIZE_BITS (sizeof(uintptr_t) * 8)
-#define BV_WORDS(BITS) ((BITS / WORDSIZE_BITS)+1)	
+#define BV_WORDS(BITS) ((BITS / WORDSIZE_BITS)+1)
 
 #define DEF_BITVEC(NAME,BITS)					\
 struct NAME ## _bvs {						\
   uintptr_t vec[BV_WORDS(BITS)];				\
 };								\
+                                                                \
 static inline void						\
 NAME ## _set_bit_bv(struct NAME ## _bvs *bv, int bit)		\
 {								\
@@ -52,7 +53,7 @@ NAME ## _get_unset_bit_bv(struct NAME ## _bvs *bv)		\
     if( bv->vec[word] ) break;					\
   }								\
   if (word >= BV_WORDS(BITS)) return -1;			\
-								\
+                                                                \
   /* FIXME: use gcc builtin routines for this */		\
   for (bit = 0; bit < WORDSIZE_BITS; bit++) {				\
     uintptr_t mask = (uintptr_t)1 << bit;				\
