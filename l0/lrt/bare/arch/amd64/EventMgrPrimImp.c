@@ -43,13 +43,9 @@
 STATIC_ASSERT(LRT_EVENT_NUM_EVENTS % 8 == 0,
               "num allocatable events isn't divisible by 8");
 static uint8_t alloc_table[LRT_EVENT_NUM_EVENTS / 8];
-
+static struct lrt_event_descriptor lrt_event_table[LRT_EVENT_NUM_EVENTS];
 CObject(EventMgrPrimImp){
   CObjInterface(EventMgrPrim) *ft;
-
-  // for now, make this share descriptor tables, may replicate
-  // later
-  struct lrt_event_descriptor *lrt_event_table_ptr;
 };
 
 static EBBRC
@@ -105,9 +101,8 @@ static EBBRC
 EventMgrPrimImp_bindEvent(EventMgrPrimRef _self, EventNo eventNo,
           EBBId handler, EBBFuncNum fn)
 {
-  EventMgrPrimImpRef self = (EventMgrPrimImpRef)_self;
-  self->lrt_event_table_ptr[eventNo].id = handler;
-  self->lrt_event_table_ptr[eventNo].fnum = fn;
+  lrt_event_table[eventNo].id = handler;
+  lrt_event_table[eventNo].fnum = fn;
   return EBBRC_OK;
 }
 
@@ -131,8 +126,7 @@ EventMgrPrimImp_triggerEvent(EventMgrPrimRef _self, EventNo eventNo,
 static EBBRC
 EventMgrPrimImp_dispatchEvent(EventMgrPrimRef _self, EventNo eventNo)
 {
-  EventMgrPrimImpRef self = (EventMgrPrimImpRef)_self;
-  struct lrt_event_descriptor *desc = &self->lrt_event_table_ptr[eventNo];
+  struct lrt_event_descriptor *desc = &lrt_event_table[eventNo];
   lrt_trans_id id = desc->id;
   lrt_trans_func_num fnum = desc->fnum;
 
@@ -181,19 +175,6 @@ EventMgrPrimImp_createRep(CObjEBBRootMultiRef root)
 
   EventMgrPrimSetFT(repRef);
 
-  // note we get here with the root object locked, and we are assuming tht
-  // in searching for/allocating the event_table.  When we parallelize
-  // rep creation this will fail
-  EBBRep *rep;
-  root->ft->nextRep(root, 0, &rep);
-  if (rep != NULL) {
-    repRef->lrt_event_table_ptr = ((EventMgrPrimImpRef)rep)->lrt_event_table_ptr;
-  } else {
-    // allocate the table; reminder this is locked at root
-    rc = EBBPrimMalloc(sizeof(struct lrt_event_descriptor)*LRT_EVENT_NUM_EVENTS,
-                       &repRef->lrt_event_table_ptr, EBB_MEM_DEFAULT);
-  }
-
   return (EBBRep *)repRef;
 }
 
@@ -230,3 +211,15 @@ EventMgrPrimImpInit(void)
   }
   return EBBRC_OK;
 };
+
+void
+EventMgrPrimImpTransfer_get(uint8_t *alloc_table_out,
+                            struct lrt_event_descriptor *lrt_event_table_out)
+{
+  for(int i = 0; i < LRT_EVENT_NUM_EVENTS; i++) {
+    if (i % 8 == 0) {
+      alloc_table_out[i/8] = alloc_table[i/8];
+    }
+    lrt_event_table_out[i] = lrt_event_table[i];
+  }
+}

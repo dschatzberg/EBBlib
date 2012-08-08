@@ -64,10 +64,10 @@ SwapInterceptorImp_PreCall(InterceptorRef _self, struct args *args,
   case FORWARD:
     break;
   case BLOCKED:
-    while (self->shared->release == false) {
+    while (ACCESS_ONCE(self->shared->release) == false) {
       cpu_relax();
     }
-    //Ok transfer has occured
+    //Ok transfer has occurred
     *(void **)args = NULL; //set the this pointer to NULL so it gets
                            //reacquired
     self->stage = FORWARD;
@@ -115,11 +115,11 @@ SwapInterceptorImp_rrEvent(SwapInterceptorImpRef self)
 {
   if (self->shared->start != MyEventLoc()) {
     //We are at a quiescent point on this location, so we block
-    self->stage = BLOCKED;
     EBBRC rc = COBJ_EBBCALL(theEventMgrPrimId, triggerEvent,
                       self->shared->ev, EVENT_LOC_SINGLE,
                       NextEventLoc(MyEventLoc()));
     LRT_RCAssert(rc);
+    self->stage = BLOCKED;
   } else {
     self->shared->tf();
     self->shared->release = true;

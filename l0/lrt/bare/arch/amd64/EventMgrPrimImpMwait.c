@@ -45,6 +45,7 @@
 STATIC_ASSERT(LRT_EVENT_NUM_EVENTS % 8 == 0,
               "num allocatable events isn't divisible by 8");
 static uint8_t alloc_table[LRT_EVENT_NUM_EVENTS / 8];
+static struct lrt_event_descriptor lrt_event_table[LRT_EVENT_NUM_EVENTS];
 
 struct event_bvs {
   uint64_t vec[4];
@@ -62,12 +63,12 @@ event_set_bit_bv(struct event_bvs *bv, int bit)
 static inline int
 event_get_unset_bit_bv(struct event_bvs *bv)
 {
-  for (int word = 0; word < 4; word++) {
+  for (int word = 3; word >= 0; word--) {
     uint64_t val = ACCESS_ONCE(bv->vec[word]);
-    int bit = __builtin_ffsl(val);
-    if (bit != 0) {
-      __sync_and_and_fetch(&bv->vec[word], ~(1 << (bit-1)));
-      return word * 64 + bit - 1;
+    if (val) {
+      int bit = 63 - __builtin_clzl(val);
+      __sync_and_and_fetch(&bv->vec[word], ~(1 << bit));
+      return word * 64 + bit;
     }
   }
   return -1;
@@ -76,9 +77,6 @@ event_get_unset_bit_bv(struct event_bvs *bv)
 CObject(EventMgrPrimImpMwait){
   CObjInterface(EventMgrPrim) *ft;
 
-  // for now, make this share descriptor tables, may replicate
-  // later
-  struct lrt_event_descriptor *lrt_event_table_ptr;
   EventMgrPrimImpMwaitRef *reps;
   CObjEBBRootMultiRef theRoot;
   EventLoc eventLoc;
@@ -91,7 +89,30 @@ EventMgrPrimImpMwait_allocEventNo(EventMgrPrimRef _self, EventNo *eventNoPtr)
   int i;
   //we start from the beginning and just find the first
   // unallocated event
-  for (i = 0; i < LRT_EVENT_NUM_EVENTS; i++) {
+  for (i = 0;
+       i < (LRT_EVENT_NUM_EVENTS - LRT_EVENT_NUM_HIGH_PRIORITY_EVENTS);
+       i++) {
+    uint8_t res = __sync_fetch_and_or(&alloc_table[i / 8], 1 << (i % 8));
+    if (!(res & (1 << (i % 8)))) {
+      break;
+    }
+  }
+  if (i >= (LRT_EVENT_NUM_EVENTS - LRT_EVENT_NUM_HIGH_PRIORITY_EVENTS)) {
+    return EBBRC_OUTOFRESOURCES;
+  }
+  *eventNoPtr = i;
+  return EBBRC_OK;
+}
+
+static EBBRC
+EventMgrPrimImpMwait_allocHighPriorityEventNo(EventMgrPrimRef _self,
+                                         EventNo *eventNoPtr)
+{
+  int i;
+  //we start from the beginning and just find the first
+  // unallocated event
+  for (i = (LRT_EVENT_NUM_EVENTS - LRT_EVENT_NUM_HIGH_PRIORITY_EVENTS);
+       i < LRT_EVENT_NUM_EVENTS; i++) {
     uint8_t res = __sync_fetch_and_or(&alloc_table[i / 8], 1 << (i % 8));
     if (!(res & (1 << (i % 8)))) {
       break;
@@ -115,9 +136,8 @@ static EBBRC
 EventMgrPrimImpMwait_bindEvent(EventMgrPrimRef _self, EventNo eventNo,
           EBBId handler, EBBFuncNum fn)
 {
-  EventMgrPrimImpMwaitRef self = (EventMgrPrimImpMwaitRef)_self;
-  self->lrt_event_table_ptr[eventNo].id = handler;
-  self->lrt_event_table_ptr[eventNo].fnum = fn;
+  lrt_event_table[eventNo].id = handler;
+  lrt_event_table[eventNo].fnum = fn;
   return EBBRC_OK;
 }
 
@@ -177,8 +197,7 @@ EventMgrPrimImpMwait_triggerEvent(EventMgrPrimRef _self, EventNo eventNo,
 static EBBRC
 EventMgrPrimImpMwait_dispatchEvent(EventMgrPrimRef _self, EventNo eventNo)
 {
-  EventMgrPrimImpMwaitRef self = (EventMgrPrimImpMwaitRef)_self;
-  struct lrt_event_descriptor *desc = &self->lrt_event_table_ptr[eventNo];
+  struct lrt_event_descriptor *desc = &lrt_event_table[eventNo];
   lrt_trans_id id = desc->id;
   lrt_trans_func_num fnum = desc->fnum;
 
@@ -226,6 +245,7 @@ EventMgrPrimImpMwait_enableInterrupts(EventMgrPrimRef _self)
 CObjInterface(EventMgrPrim) EventMgrPrimImpMwait_ftable = {
   .allocEventNo = EventMgrPrimImpMwait_allocEventNo,
   .freeEventNo = EventMgrPrimImpMwait_freeEventNo,
+  .allocHighPriorityEventNo = EventMgrPrimImpMwait_allocHighPriorityEventNo,
   .bindEvent = EventMgrPrimImpMwait_bindEvent,
   .routeIRQ = EventMgrPrimImpMwait_routeIRQ,
   .triggerEvent = EventMgrPrimImpMwait_triggerEvent,
@@ -256,18 +276,6 @@ EventMgrPrimImpMwait_createRep(CObjEBBRootMultiRef root)
   rc = EBBPrimMalloc(sizeof(repRef->reps)*lrt_num_event_loc(), &repRef->reps,
                      EBB_MEM_DEFAULT);
   bzero(repRef->reps, sizeof(repRef->reps) * lrt_num_event_loc());
-  // note we get here with the root object locked, and we are assuming tht
-  // in searching for/allocating the event_table.  When we parallelize
-  // rep creation this will fail
-  EBBRep *rep;
-  root->ft->nextRep(root, 0, &rep);
-  if (rep != NULL) {
-    repRef->lrt_event_table_ptr = ((EventMgrPrimImpMwaitRef)rep)->lrt_event_table_ptr;
-  } else {
-    // allocate the table; reminder this is locked at root
-    rc = EBBPrimMalloc(sizeof(struct lrt_event_descriptor)*LRT_EVENT_NUM_EVENTS,
-                       &repRef->lrt_event_table_ptr, EBB_MEM_DEFAULT);
-  }
 
   return (EBBRep *)repRef;
 }
@@ -290,6 +298,8 @@ EventMgrPrimImpMwaitInit(void)
 
   if (__sync_bool_compare_and_swap(&theEventMgrPrimId, (EventMgrPrimId)0,
                                    (EventMgrPrimId)-1)) {
+    LRT_Assert(has_monitor());
+    LRT_Assert(monitor_ibe());
     EBBMissFunc mf;
     EBBArg arg;
     rc = EventMgrPrimImpMwaitCreate(&mf, &arg);
@@ -305,3 +315,15 @@ EventMgrPrimImpMwaitInit(void)
   }
   return EBBRC_OK;
 };
+
+void
+EventMgrPrimImpMwaitTransfer_set(uint8_t *alloc_table_in,
+                                 struct lrt_event_descriptor *lrt_event_table_in)
+{
+  for(int i = 0; i < LRT_EVENT_NUM_EVENTS; i++) {
+    if (i % 8 == 0) {
+      alloc_table[i/8] = alloc_table_in[i/8];
+    }
+    lrt_event_table[i] = lrt_event_table_in[i];
+  }
+}

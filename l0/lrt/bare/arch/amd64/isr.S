@@ -23,13 +23,16 @@
         .macro exception num:req
                 .globl isr_\num
                 isr_\num:
+                        .cfi_startproc
                         movq $\num, %rdi
                         call exception_common
+                        .cfi_endproc
         .endm
 
         .macro event num:req
                 .globl isr_\num
                 isr_\num:
+                        andq $(~(1 << 9)), 16(%rsp) //clear IF in the pushed flags register
                         pushq %rsp //store original rsp
                         pushq (%rsp) //store it again right afterwards
                         andq $-0x10, %rsp //align to 16 bytes

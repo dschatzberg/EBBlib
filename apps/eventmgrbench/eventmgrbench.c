@@ -26,12 +26,15 @@
 #include <stdbool.h>
 
 #include <arch/cpu.h>
+#include <intercept/Interceptor.h>
+#include <intercept/SwapInterceptor.h>
 #include <l0/EventMgrPrimImp.h>
+#include <l0/cobj/CObjEBBRootShared.h>
+#include <l0/cobj/CObjEBBUtils.h>
 #include <l1/App.h>
 #include <lrt/exit.h>
 #include <lrt/io.h>
-#include <l0/cobj/CObjEBBRootShared.h>
-#include <l0/cobj/CObjEBBUtils.h>
+#include <lrt/string.h>
 #include <sync/barrier.h>
 
 CObject(EventMgrBench) {
@@ -103,41 +106,75 @@ enum test_type {
 
 static enum test_type test;
 static EventNo runTestEvent;
+static EventNo endSwapEvent;
 static EventNo localEvent;
 static struct barrier_s barrier1;
 static struct barrier_s barrier2;
 static int num_cores = 0;
 static int order;
+static SwapInterceptorId swapId;
+static InterceptorControllerId controllerId;
 
+#include <l0/lrt/event.h>
 static void setupNextTest(void);
-extern EBBRC EventMgrPrimImpMwaitInit(void);
+extern EBBRC EventMgrPrimImpMwaitCreate(EBBMissFunc *, EBBArg *);
+extern void EventMgrPrimImpTransfer_get(uint8_t *,
+                                        struct lrt_event_descriptor *);
+extern void EventMgrPrimImpMwaitTransfer_set(uint8_t *,
+                                             struct lrt_event_descriptor *);
 
+static void
+transfer_func()
+{
+  //FIXME: free the original eventmgr
+  //FIXME: destroy its root
 
-void EventTransferFunc(void) {
-  //destroy old eventmgr
-  //set EventMgrPrimId to zero
-  theEventMgrPrimId = (EventMgrPrimId)0;
-  //init next eventmgr
-  EBBRC rc = EventMgrPrimImpMwaitInit();
+  //Create the next eventmanager
+  EBBMissFunc mf;
+  EBBArg arg;
+  EBBRC rc = EventMgrPrimImpMwaitCreate(&mf, &arg);
   LRT_RCAssert(rc);
-  //FIXME: No state transfer!
-  //we are done so lets setup the next test
-  setupNextTest();
+
+  //bind it in
+  rc = EBBBindPrimId((EBBId)theEventMgrPrimId, mf, arg);
+
+  //Ok, now transfer state
+  //FIXME: THIS IS A MASSIVE KLUDGE
+  uint8_t alloc_table[LRT_EVENT_NUM_EVENTS / 8];
+  bzero(alloc_table, sizeof(uint8_t) * LRT_EVENT_NUM_EVENTS / 8);
+  struct lrt_event_descriptor lrt_event_table[LRT_EVENT_NUM_EVENTS];
+  bzero(lrt_event_table,
+        sizeof(struct lrt_event_descriptor) * LRT_EVENT_NUM_EVENTS);
+  EventMgrPrimImpTransfer_get(alloc_table, lrt_event_table);
+  EventMgrPrimImpMwaitTransfer_set(alloc_table, lrt_event_table);
+  //transfer is complete
+
+  //after the swap is done, we continue there
+  rc = COBJ_EBBCALL(theEventMgrPrimId, triggerEvent,
+                    endSwapEvent, EVENT_LOC_SINGLE, MyEventLoc());
+  LRT_RCAssert(rc);
+
 }
 
-static void setupNextTest(void)
+static void
+setupNextTest(void)
 {
   enum stage_type {
     NOT_SETUP,
     LOCAL_NOT_SETUP,
     LOCAL_SETUP,
-    COMPLETE
+    COMPLETE,
+    SWAP_COMPLETE
   };
   static enum stage_type stage = NOT_SETUP;
+  static int num_runs = 0;
   EBBRC rc;
   int i;
   switch(stage) {
   case NOT_SETUP:
+      lrt_printf("--------------------------\n");
+      lrt_printf("-------HaltEventMgr-------\n");
+      lrt_printf("--------------------------\n");
     //Setup the run test event
     rc = COBJ_EBBCALL(theEventMgrPrimId, allocEventNo, &runTestEvent);
     LRT_RCAssert(rc);
@@ -146,6 +183,25 @@ static void setupNextTest(void)
                       (EBBId)theAppId,
                       COBJ_FUNCNUM_FROM_TYPE(CObjInterface(EventMgrBench),
                                              runNextTest));
+    LRT_RCAssert(rc);
+
+    //setup swapping interceptor
+    rc = SwapInterceptorCreate(&swapId, transfer_func);
+    LRT_RCAssert(rc);
+
+    rc = EBBAllocPrimId((EBBId *)&controllerId);
+    LRT_RCAssert(rc);
+
+    InterceptorControllerImp_Create(controllerId);
+    LRT_RCAssert(rc);
+
+    rc = COBJ_EBBCALL(theEventMgrPrimId, allocEventNo, &endSwapEvent);
+    LRT_RCAssert(rc);
+
+    rc = COBJ_EBBCALL(theEventMgrPrimId, bindEvent, endSwapEvent,
+                      (EBBId)theAppId,
+                      COBJ_FUNCNUM_FROM_TYPE(CObjInterface(App),
+                                             start));
     LRT_RCAssert(rc);
     //fall through
   case LOCAL_NOT_SETUP:
@@ -176,10 +232,35 @@ static void setupNextTest(void)
         LRT_RCAssert(rc);
       }
       break;
-    } //else fall through
+    } else {
+      num_cores = 0; //so the next run will work
+      // fall through
+    }
   case COMPLETE:
-    //swap event managers
+    if (num_runs < 1) {
+      //swap event managers
+      rc = COBJ_EBBCALL(controllerId, start, (EBBId)theEventMgrPrimId,
+                        (InterceptorId)swapId);
+      LRT_RCAssert(rc);
 
+      rc = COBJ_EBBCALL(swapId, begin);
+      stage = SWAP_COMPLETE;
+      num_runs++;
+      break;
+    } else {
+      lrt_printf("Tests Complete!\n");
+      lrt_exit(0);
+    }
+  case SWAP_COMPLETE:
+    rc = COBJ_EBBCALL(controllerId, stop);
+    LRT_RCAssert(rc);
+    stage = LOCAL_SETUP;
+    lrt_printf("--------------------------\n");
+    lrt_printf("-------MwaitEventMgr------\n");
+    lrt_printf("--------------------------\n");
+    //cause setupNextTest to run again
+    rc = COBJ_EBBCALL(theEventMgrPrimId, triggerEvent,
+                      endSwapEvent, EVENT_LOC_SINGLE, MyEventLoc());
     break;
   default:
     lrt_printf("Unknown stage!\n");
@@ -223,7 +304,7 @@ EventMgrBench_runNextTest(EventMgrBenchRef self)
 static EBBRC
 EventMgrBench_localEvent(EventMgrBenchRef self)
 {
-  if (self->count < 1000000) {
+  if (self->count < 100) {
     EBBRC rc = COBJ_EBBCALL(theEventMgrPrimId, triggerEvent,
                             localEvent, EVENT_LOC_SINGLE, MyEventLoc());
     LRT_RCAssert(rc);

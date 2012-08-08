@@ -96,4 +96,5 @@ COBJ_EBBType(EventMgrPrim) {
 
 // the ID of the one and only event manager
 extern EventMgrPrimId theEventMgrPrimId;
+
 #endif

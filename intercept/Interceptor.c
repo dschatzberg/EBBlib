@@ -86,6 +86,7 @@ intercept_precall(struct args *args, EBBFuncNum fnum, union func_ret *fr)
   if (*(lrt_trans_rep_ref *)args == NULL) {
     lrt_trans_rep_ref targ_ref = lrt_trans_id_dref(ref->target_id);
     *(lrt_trans_rep_ref *)args = targ_ref;
+    fr->func = targ_ref->ft[fnum];
   }
   return rc;
 }
